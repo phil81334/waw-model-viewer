@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WaW Model Viewer</title>
+    <link rel="icon" href="/src-tauri/icons/icon.png" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main id="app" hidden>
+      <div class="tab-bar">
+        <span class="tab">Models</span>
+        <span>WaW Model Viewer | 0.1.0</span>
+      </div>
+      <section class="panel viewer">
+        <div class="search-row">
+          <label for="search">Search</label>
+          <input
+            id="search"
+            type="search"
+            placeholder="Find a model by filename…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="reset-filters">Clear filters</button>
+          <button id="rescan">Rescan</button>
+          <button id="cache-button">Cache…</button>
+        </div>
+        <div class="filters">
+          <label for="group">Name group</label>
+          <select id="group">
+            <option value="">All groups</option>
+          </select>
+          <span id="count">Reading model catalogue…</span>
+        </div>
+        <div class="workspace">
+          <section id="grid-scroll" aria-label="Model catalogue" tabindex="0">
+            <div id="grid"></div>
+            <p id="empty-grid">Reading the Modtools models…</p>
+          </section>
+          <section class="preview-panel" aria-label="Selected model">
+            <div class="filename-row">
+              <strong id="filename">Model preview</strong>
+              <button id="copy-name" disabled>Copy name</button>
+            </div>
+            <p id="model-info" class="hint">
+              Select a thumbnail to look around a model.
+            </p>
+            <div
+              id="viewport"
+              tabindex="0"
+              aria-label="3D preview. Drag to rotate, wheel to zoom, right drag to pan."
+            >
+              <p id="preview-empty">Select a model to preview it.</p>
+            </div>
+            <div class="preview-tools">
+              <button id="reset-view" disabled>Reset view</button>
+              <label
+                ><input id="lighting" type="checkbox" /> Simple lighting</label
+              >
+              <span>Drag to rotate · wheel to zoom</span>
+            </div>
+            <details id="inspect">
+              <summary>Inspect model</summary>
+              <p id="model-stats" class="hint"></p>
+              <div class="inspection-controls">
+                <label for="lod">LOD</label>
+                <select
+                  id="lod"
+                  disabled
+                  aria-label="Model level of detail"
+                ></select>
+                <label
+                  ><input id="bones" type="checkbox" disabled /> Show
+                  bones</label
+                >
+                <label
+                  ><input id="bone-names" type="checkbox" disabled /> Show bone
+                  names</label
+                >
+                <label
+                  ><input id="mesh-outline" type="checkbox" disabled /> Mesh
+                  outline</label
+                >
+              </div>
+              <p class="hint">
+                Hover a bone to see its name. Mesh outline shows the original
+                triangle edges. No animation or editing.
+              </p>
+            </details>
+            <details id="model-warnings" hidden>
+              <summary id="model-warning-title">Preview notes</summary>
+              <pre id="model-warning-text"></pre>
+            </details>
+          </section>
+        </div>
+        <p id="message" role="status"></p>
+      </section>
+    </main>
+    <footer id="footer" hidden>
+      <span id="status" role="status">Ready</span>
+      <div class="footer-tools">
+        <span id="environment"></span>
+        <button
+          id="about"
+          class="icon-button"
+          aria-label="About WaW Model Viewer"
+          title="About"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 11v6" />
+            <circle
+              cx="12"
+              cy="7.5"
+              r="0.9"
+              fill="currentColor"
+              stroke="none"
+            />
+          </svg>
+        </button>
+      </div>
+    </footer>
+    <dialog id="about-dialog" aria-labelledby="about-title">
+      <div class="dialog-title" id="about-title">About WaW Model Viewer</div>
+      <div class="dialog-body">
+        <p>An unofficial tool made for the World at War modding community.</p>
+        <p>
+          Browse the stock Modtools models, find a filename by eye, and rotate a
+          textured preview. Optional inspection controls show LODs and named
+          bones.
+        </p>
+        <p>
+          Colour textures and transparency are shown with simple preview
+          lighting, off by default. Hover bones for names or show all names with
+          a checkbox. Mesh outline displays the original triangle edges. This
+          does not recreate the game's advanced materials or effects. No
+          exporting, animation or editing. Game files are never modified.
+        </p>
+        <p>
+          Independent of Treyarch, Activision and UGX. Built with JavaScript,
+          Vite, Rust, Tauri and Three.js. Open source under GPL-3.0; see
+          ATTRIBUTION.md.
+        </p>
+        <p class="credit">Created by <strong>phil81334</strong>.</p>
+        <label for="repo-url">Source, instructions and releases</label>
+        <input
+          id="repo-url"
+          class="repo-url"
+          value="https://github.com/phil81334/waw-model-viewer"
+          readonly
+        />
+        <div class="dialog-actions">
+          <button id="close-about">Close</button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="cache-dialog" aria-labelledby="cache-title">
+      <div class="dialog-title" id="cache-title">Preview cache</div>
+      <div class="dialog-body">
+        <p>
+          The catalogue, thumbnails and decoded colour images are cached here.
+          Clearing this folder does not change your game files.
+        </p>
+        <input
+          id="cache-path"
+          class="repo-url"
+          readonly
+          aria-label="Cache location"
+        />
+        <p class="hint">
+          Only models you browse need thumbnails. Rescan refreshes the catalogue
+          and cached previews.
+        </p>
+        <div class="dialog-actions">
+          <button id="open-cache">Open folder</button>
+          <button id="clear-cache">Clear cache</button>
+          <button id="close-cache">Close</button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="startup-error" aria-labelledby="startup-title">
+      <div class="dialog-title" id="startup-title">
+        World at War folder required
+      </div>
+      <div class="dialog-body">
+        <p id="startup-message"></p>
+        <div class="dialog-actions"><button id="quit">Close</button></div>
+      </div>
+    </dialog>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
