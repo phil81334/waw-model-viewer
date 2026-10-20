@@ -19,6 +19,15 @@ const factors = {
   InvDestColor: THREE.OneMinusDstColorFactor,
 };
 
+function boneLabel(bone, index) {
+  // Some stock skeletons store an empty name for their root bone. Identify it
+  // in the UI without inventing an asset name or changing the source data.
+  if (bone.name.trim() === "") {
+    return `Unnamed bone ${index + 1}`;
+  }
+  return bone.name;
+}
+
 function textureFromBytes(value) {
   const bytes = new Uint8Array(value);
   const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -393,7 +402,7 @@ export class ModelViewer {
     this.boneLabels = data.bones.map((bone, index) => {
       const label = document.createElement("span");
       label.className = "bone-name";
-      label.textContent = bone.name;
+      label.textContent = boneLabel(bone, index);
       label.dataset.boneIndex = String(index);
       label.hidden = true;
       this.labels.append(label);
@@ -535,7 +544,7 @@ export class ModelViewer {
       // at the shared point rather than making the extra tags impossible to hover.
       const names = this.projectedBones.flatMap((other, index) => {
         if (other && Math.hypot(other.x - point.x, other.y - point.y) < 1) {
-          return [this.data.bones[index].name];
+          return [boneLabel(this.data.bones[index], index)];
         }
         return [];
       });
