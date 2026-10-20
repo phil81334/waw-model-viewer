@@ -6,11 +6,15 @@ Browse World at War's Modtools models and find a filename by eye. Click a thumbn
 
 ![WaW Model Viewer](images/waw-model-viewer.png)
 
-## Use
+## Download and run
 
-1. Install the WaW Modtools in your game folder.
-2. Download `waw-model-viewer.exe` from [Releases](https://github.com/phil81334/waw-model-viewer/releases/latest).
-3. Put it beside `CoDWaW.exe` and open it.
+1. Have World at War and its Modtools installed in the same game folder.
+2. Open [Releases](https://github.com/phil81334/waw-model-viewer/releases/latest). Under **Assets**, download **waw-model-viewer.exe**. The source-code ZIP is for development.
+3. Put the EXE in the folder containing `CoDWaW.exe`, then double-click it.
+
+You do not need Node.js, Rust or VS Code to use the EXE. Windows needs [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/#download-section), usually already installed; if missing, install its **Evergreen Bootstrapper**.
+
+## Browse models
 
 Search or choose a name group, then click a thumbnail. Drag to rotate, wheel to zoom, or right-drag to pan. **Copy name** copies the filename. Groups use filename prefixes.
 
@@ -24,17 +28,33 @@ Thumbnails load as you browse and are cached in AppData. **Cache…** shows the 
 
 ## Run from source
 
-1. Install [Node.js LTS](https://nodejs.org/) and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/#windows): Rust and Microsoft C++ Build Tools.
-2. Download and extract this repository, or clone it. Open the folder in VS Code.
-3. In **Terminal → New Terminal**, run:
+**Windows setup — do this once.** Skip anything already installed.
+
+| Install | What to choose |
+| --- | --- |
+| [VS Code](https://code.visualstudio.com/) | The Windows installer. This is where you open the project. |
+| [Node.js](https://nodejs.org/en/download) | **LTS**, **Windows**, **Installer (.msi)**. Keep the default options; npm is included. |
+| [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) | In its installer, select **Desktop development with C++**. Keep the selected MSVC tools and Windows SDK. |
+| [Rust](https://rust-lang.org/tools/install/) | Download and run **rustup-init.exe (x64)**. Choose the default installation. |
+
+Close and reopen VS Code after installing these. [Tauri's Windows guide](https://v2.tauri.app/start/prerequisites/#windows) has more help. Vite and Tauri are installed by the project; no separate installation or Python is needed.
+
+**Open and run the project:**
+
+1. On this GitHub page, choose **Code → Download ZIP**, then extract it. You can clone it instead if you already use Git.
+2. In VS Code, choose **File → Open Folder**. Open the extracted folder containing `package.json`.
+3. In VS Code's Explorer, create a folder named `.local`, then a file inside it named `game-path.txt`.
+4. Open your WaW game folder in Windows File Explorer—the one containing `CoDWaW.exe`. Click the address bar, copy the full folder address, paste it into `game-path.txt` and save. Use your actual folder, on whichever drive you installed WaW. One line, no quotes, no EXE filename.
+5. Choose **Terminal → New Terminal**, then run these commands one at a time:
 
    ```powershell
    npm install
-   $env:WAW_ROOT = 'D:\Your game folder\Call of Duty World at War'
    npm run dev
    ```
 
-For the VS Code **NPM Scripts** play button, create `.local/game-path.txt` containing just your game folder path. Then click **dev**. The packaged app always uses its own folder.
+`npm install` downloads the project's dependencies. `npm run dev` opens the desktop app. The first run downloads and compiles Rust dependencies, so give it time. Keep the terminal open; press **Ctrl+C** there to stop development.
+
+Next time, run `npm run dev`, or click the play button beside **dev** in VS Code's **NPM Scripts** panel. If that panel is hidden, right-click the Explorer panel headings and enable **NPM Scripts**. Update `game-path.txt` if you move WaW. The packaged EXE always uses its own folder instead.
 
 | Command | What it does |
 | --- | --- |
@@ -43,6 +63,6 @@ For the VS Code **NPM Scripts** play button, create `.local/game-path.txt` conta
 | `npm run build` | Creates `release/waw-model-viewer.exe`. |
 | `npm run build:web` | Builds the UI files only. No EXE. |
 
-The first Rust build takes longer. Windows needs [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/), normally already installed. No Python needed.
+To make your own EXE, run `npm run build`, then copy `release/waw-model-viewer.exe` beside `CoDWaW.exe`.
 
 [Credits](ATTRIBUTION.md) · [GPL-3.0 licence](LICENCE)
