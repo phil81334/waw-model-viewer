@@ -24,10 +24,58 @@ pub struct Entry {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct Statistics {
+    pub total: usize,
+    pub missing_mesh: usize,
+    pub missing_files: usize,
+    pub empty_geometry: usize,
+    pub other: usize,
+    pub failed_previews: usize,
+}
+
+impl Statistics {
+    fn eligible(&self) -> usize {
+        self.total.saturating_sub(
+            self.missing_mesh + self.missing_files + self.empty_geometry + self.other,
+        )
+    }
+
+    fn record(&mut self, exclusion: &Exclusion) {
+        match exclusion {
+            Exclusion::MissingMesh(_) => self.missing_mesh += 1,
+            Exclusion::MissingFiles(_) => self.missing_files += 1,
+            Exclusion::EmptyGeometry(_) => self.empty_geometry += 1,
+            Exclusion::Other(_) => self.other += 1,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Exclusion {
+    MissingMesh(String),
+    MissingFiles(String),
+    EmptyGeometry(String),
+    Other(String),
+}
+
+impl Exclusion {
+    fn message(&self) -> &str {
+        match self {
+            Self::MissingMesh(message)
+            | Self::MissingFiles(message)
+            | Self::EmptyGeometry(message)
+            | Self::Other(message) => message,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Index {
     pub entries: Vec<Entry>,
     pub warnings: Vec<String>,
     pub cache_path: String,
+    pub statistics: Statistics,
 }
 
 #[derive(Serialize)]
@@ -145,16 +193,20 @@ impl Catalog {
             cache_path: self.cache.display().to_string(),
             ..Index::default()
         };
-        let mut material_cache: HashMap<String, Result<Material, String>> = HashMap::new();
-        let mut mesh_cache: HashMap<String, Result<(usize, bool), String>> = HashMap::new();
+        let mut material_cache: HashMap<String, Result<Material, Exclusion>> = HashMap::new();
+        let mut mesh_cache: HashMap<String, Result<(usize, bool), Exclusion>> = HashMap::new();
         for path in paths
             .iter()
             .filter(|path| path.parent() == Some(self.root.join("raw/xmodel").as_path()))
         {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            index.statistics.total += 1;
             let result = (|| {
-                let descriptor = model::descriptor(path)?;
-                let first = descriptor.lods.first().ok_or("Model has no LOD records.")?;
+                let descriptor = model::descriptor(path).map_err(Exclusion::Other)?;
+                let first = descriptor
+                    .lods
+                    .first()
+                    .ok_or_else(|| Exclusion::Other("Model has no LOD records.".into()))?;
                 // Browse complete models only. The primary LOD must work; lower
                 // LODs are offered only when their own inputs pass the same check.
                 let mut lods = Vec::new();
@@ -172,7 +224,7 @@ impl Catalog {
                         Err(_) => {}
                     }
                 }
-                Ok::<Entry, String>(Entry {
+                Ok::<Entry, Exclusion>(Entry {
                     id: digest(format!("{key}|{name}").as_bytes()),
                     group: group(&name.to_lowercase()).into(),
                     name: name.clone(),
@@ -184,7 +236,8 @@ impl Catalog {
                     index.entries.push(entry);
                 }
                 Err(error) => {
-                    index.warnings.push(format!("{name}: {error}"));
+                    index.statistics.record(&error);
+                    index.warnings.push(format!("{name}: {}", error.message()));
                 }
             }
         }
@@ -207,6 +260,10 @@ impl Catalog {
                 .join(format!("{}.txt", entry.id))
                 .is_file()
         });
+        index.statistics.failed_previews = index
+            .statistics
+            .eligible()
+            .saturating_sub(index.entries.len());
     }
 
     pub fn hide(&mut self, id: &str) -> Result<(), String> {
@@ -219,6 +276,11 @@ impl Catalog {
         )
         .map_err(|error| error.to_string())?;
         self.index.entries.retain(|entry| entry.id != id);
+        self.index.statistics.failed_previews = self
+            .index
+            .statistics
+            .eligible()
+            .saturating_sub(self.index.entries.len());
         Ok(())
     }
 
@@ -350,12 +412,46 @@ fn validate_lod(
     root: &Path,
     lod: &model::Lod,
     textures: &Textures,
-    materials: &mut HashMap<String, Result<Material, String>>,
-    meshes: &mut HashMap<String, Result<(usize, bool), String>>,
-) -> Result<(), String> {
+    materials: &mut HashMap<String, Result<Material, Exclusion>>,
+    meshes: &mut HashMap<String, Result<(usize, bool), Exclusion>>,
+) -> Result<(), Exclusion> {
+    let mesh_path = model::asset_path(root, "xmodelsurfs", &lod.name).map_err(Exclusion::Other)?;
+    if !mesh_path.is_file() {
+        return Err(Exclusion::MissingMesh(format!(
+            "Missing mesh: {}",
+            lod.name
+        )));
+    }
+    // Count one reason per excluded model. Missing required inputs take priority
+    // over empty geometry, so a file problem is not reported as an empty model.
+    for material_name in &lod.materials {
+        if !materials.contains_key(material_name) {
+            let value = (|| {
+                let path = model::asset_path(root, "materials", material_name)
+                    .map_err(Exclusion::Other)?;
+                if !path.is_file() {
+                    return Err(Exclusion::MissingFiles(format!(
+                        "Missing material: {material_name}"
+                    )));
+                }
+                material::read(&path, material_name).map_err(Exclusion::Other)
+            })();
+            materials.insert(material_name.clone(), value);
+        }
+        let material = materials[material_name].as_ref().map_err(Clone::clone)?;
+        let image = material
+            .image
+            .as_ref()
+            .ok_or_else(|| Exclusion::Other("Material has no colour image.".into()))?;
+        if !textures.contains(image) {
+            return Err(Exclusion::MissingFiles(format!(
+                "Missing colour image: {image}"
+            )));
+        }
+    }
     if !meshes.contains_key(&lod.name) {
-        let value = model::asset_path(root, "xmodelsurfs", &lod.name)
-            .and_then(|path| model::surfaces(&path))
+        let value = model::surfaces(&mesh_path)
+            .map_err(Exclusion::Other)
             .map(|surfaces| {
                 (
                     surfaces.len(),
@@ -366,25 +462,14 @@ fn validate_lod(
     }
     let (count, visible) = meshes[&lod.name].as_ref().map_err(Clone::clone)?;
     if !visible {
-        return Err("No visible coloured triangles in this mesh.".into());
+        return Err(Exclusion::EmptyGeometry(
+            "No visible coloured triangles in this mesh.".into(),
+        ));
     }
     if *count != lod.materials.len() {
-        return Err("Surface and material counts differ.".into());
-    }
-    for material_name in &lod.materials {
-        if !materials.contains_key(material_name) {
-            let value = model::asset_path(root, "materials", material_name)
-                .and_then(|path| material::read(&path, material_name));
-            materials.insert(material_name.clone(), value);
-        }
-        let material = materials[material_name].as_ref().map_err(Clone::clone)?;
-        let image = material
-            .image
-            .as_ref()
-            .ok_or("Material has no colour image.")?;
-        if !textures.contains(image) {
-            return Err(format!("Missing colour image: {image}"));
-        }
+        return Err(Exclusion::Other(
+            "Surface and material counts differ.".into(),
+        ));
     }
     Ok(())
 }

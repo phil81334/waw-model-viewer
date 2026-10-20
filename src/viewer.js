@@ -211,42 +211,6 @@ function oppositeView(camera, group) {
   camera.lookAt(centre);
 }
 
-// Place names near their joints without covering names already placed. Small
-// leader lines preserve the association when crowded joints need extra room.
-function labelPosition(point, width, height, labelWidth, occupied) {
-  const clamp = (value, maximum) => Math.max(2, Math.min(value, maximum - 2));
-  const columns = [point.x + 8, point.x - labelWidth - 8];
-  for (let left = 4; left + labelWidth < width; left += labelWidth + 4) {
-    columns.push(left);
-  }
-  for (let step = 0; step <= Math.ceil(height / 20) * 2; step += 1) {
-    const shift = Math.ceil(step / 2) * 20 * (step % 2 ? 1 : -1);
-    const top = clamp(point.y - 9 + shift, height - 18);
-    for (const preferred of columns) {
-      const left = clamp(preferred, width - labelWidth);
-      const candidate = { left, top, width: labelWidth, height: 18 };
-      const overlap = occupied.some(
-        (other) =>
-          left < other.left + other.width + 2 &&
-          left + labelWidth + 2 > other.left &&
-          top < other.top + other.height + 2 &&
-          top + 20 > other.top,
-      );
-      if (!overlap) {
-        return candidate;
-      }
-    }
-  }
-  // A very small viewport may not fit every name. Hover remains available and
-  // draws above all names, rather than changing or omitting any bone data.
-  return {
-    left: clamp(point.x + 8, width - labelWidth),
-    top: clamp(point.y - 9, height - 18),
-    width: labelWidth,
-    height: 18,
-  };
-}
-
 function fit(camera, object, controls = null) {
   object.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(object);
@@ -351,17 +315,10 @@ export class ModelViewer {
     this.interacting = false;
     this.projectedBones = [];
     this.boneLabels = [];
-    this.nameWidths = [];
     this.labels = document.createElement("div");
     this.labels.className = "bone-labels";
     this.labels.setAttribute("aria-hidden", "true");
     container.append(this.labels);
-    this.leaders = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "svg",
-    );
-    this.leaders.classList.add("bone-leaders");
-    this.labels.append(this.leaders);
     this.tooltip = document.createElement("span");
     this.tooltip.className = "bone-tooltip";
     this.tooltip.hidden = true;
@@ -424,8 +381,6 @@ export class ModelViewer {
       label.remove();
     }
     this.boneLabels = [];
-    this.nameWidths = [];
-    this.leaders.replaceChildren();
     this.tooltip.hidden = true;
     this.controls.enabled = false;
     this.render();
@@ -435,16 +390,6 @@ export class ModelViewer {
     this.clear();
     this.model = group;
     this.data = data;
-    const text = document.createElement("canvas").getContext("2d");
-    if (text) {
-      text.font = '11px "Segoe UI", Arial, sans-serif';
-    }
-    this.nameWidths = data.bones.map(
-      (bone) =>
-        Math.ceil(
-          text ? text.measureText(bone.name).width : bone.name.length * 11,
-        ) + 10,
-    );
     this.boneLabels = data.bones.map((bone, index) => {
       const label = document.createElement("span");
       label.className = "bone-name";
@@ -452,12 +397,6 @@ export class ModelViewer {
       label.dataset.boneIndex = String(index);
       label.hidden = true;
       this.labels.append(label);
-      const line = document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "line",
-      );
-      line.dataset.boneIndex = String(index);
-      this.leaders.append(line);
       return label;
     });
     this.scene.add(group);
@@ -579,50 +518,14 @@ export class ModelViewer {
         depth: point.z,
       };
     });
-    this.leaders.style.display =
-      this.overlay && this.namesVisible ? "" : "none";
-    const occupied = [];
-    // A stable top-to-bottom order keeps neighbouring names near one another.
-    const order = this.boneLabels
-      .map((label, index) => index)
-      .sort(
-        (a, b) =>
-          (this.projectedBones[a]?.y || 0) - (this.projectedBones[b]?.y || 0),
-      );
-    for (const index of order) {
-      const label = this.boneLabels[index];
+    for (const [index, label] of this.boneLabels.entries()) {
       const point = this.projectedBones[index];
-      const line = this.leaders.children[index];
       label.hidden = !this.overlay || !this.namesVisible || !point;
-      line.style.display = label.hidden ? "none" : "";
       if (!label.hidden) {
-        const position = labelPosition(
-          point,
-          width,
-          height,
-          Math.min(this.nameWidths[index], width - 4),
-          occupied,
-        );
-        occupied.push(position);
-        label.style.left = `${position.left}px`;
-        label.style.top = `${position.top}px`;
-        label.style.width = `${position.width}px`;
-        line.setAttribute("x1", point.x);
-        line.setAttribute("y1", point.y);
-        line.setAttribute(
-          "x2",
-          Math.max(
-            position.left,
-            Math.min(point.x, position.left + position.width),
-          ),
-        );
-        line.setAttribute(
-          "y2",
-          Math.max(
-            position.top,
-            Math.min(point.y, position.top + position.height),
-          ),
-        );
+        // Keep a fixed offset from the projected joint. Do not move labels to
+        // other parts of the viewport to avoid overlaps while orbiting.
+        label.style.left = `${point.x + 7}px`;
+        label.style.top = `${point.y - 9}px`;
       }
     }
     const point = this.projectedBones[this.hoveredBone];

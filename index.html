@@ -11,7 +11,7 @@
     <main id="app" hidden>
       <div class="tab-bar">
         <span class="tab">Models</span>
-        <span>WaW Model Viewer | 0.1.0</span>
+        <span>WaW Model Viewer | 0.2.0</span>
       </div>
       <section class="panel viewer">
         <div class="search-row">
@@ -53,11 +53,15 @@
               aria-label="3D preview. Drag to rotate, wheel to zoom, right drag to pan."
             >
               <p id="preview-empty">Select a model to preview it.</p>
+              <pre id="catalogue-statistics" hidden aria-live="polite"></pre>
             </div>
             <div class="preview-tools">
               <button id="reset-view" disabled>Reset view</button>
               <label
                 ><input id="lighting" type="checkbox" /> Simple lighting</label
+              >
+              <label
+                ><input id="statistics" type="checkbox" /> Statistics</label
               >
               <span>Drag to rotate · wheel to zoom</span>
             </div>
@@ -87,6 +91,11 @@
               <p class="hint">
                 Hover a bone to see its name. Mesh outline shows the original
                 triangle edges. No animation or editing.
+              </p>
+              <p class="hint">
+                Only colour images are previewed. Game lighting, glow and other
+                material effects are not recreated, so some _on variants can
+                look alike.
               </p>
             </details>
             <details id="model-warnings" hidden>

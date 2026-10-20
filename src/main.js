@@ -13,6 +13,7 @@ const placeholderIcon = new URL("../src-tauri/icons/icon.png", import.meta.url)
 let viewer;
 let thumbnailRenderer;
 let entries = [];
+let catalogueStatistics = null;
 let visible = [];
 let selected = null;
 let scanBusy = false;
@@ -40,6 +41,36 @@ function readPixels(name, size) {
   return invoke("texture_pixels", { name, size });
 }
 
+function updateStatistics() {
+  const overlay = element("catalogue-statistics");
+  overlay.hidden = !element("statistics").checked;
+  if (!catalogueStatistics) {
+    overlay.textContent = scanBusy
+      ? "Scanning models…"
+      : "No catalogue loaded.";
+    return;
+  }
+  const stats = catalogueStatistics;
+  const count = (value) => value.toLocaleString();
+  const eligible =
+    stats.total -
+    stats.missingMesh -
+    stats.missingFiles -
+    stats.emptyGeometry -
+    stats.other;
+  const failed = Math.max(0, eligible - entries.length);
+  overlay.textContent = [
+    `Models found: ${count(stats.total)}`,
+    `Available: ${count(entries.length)} · left out: ${count(stats.total - entries.length)}`,
+    `Missing meshes: ${count(stats.missingMesh)}`,
+    `Missing inputs: ${count(stats.missingFiles)}`,
+    `Empty geometry: ${count(stats.emptyGeometry)}`,
+    `Other unusable: ${count(stats.other)}`,
+    `Failed previews: ${count(failed)}`,
+    "Previews are checked as you browse.",
+  ].join("\n");
+}
+
 function applyFilters(resetScroll = true) {
   const query = element("search").value.trim().toLowerCase();
   const group = element("group").value;
@@ -59,6 +90,7 @@ function applyFilters(resetScroll = true) {
   }
   element("empty-grid").textContent = "No models match these filters.";
   renderGrid();
+  updateStatistics();
 }
 
 function scheduleGrid() {
@@ -338,6 +370,8 @@ async function scan(force) {
   selected = null;
   clearPreview();
   entries = [];
+  catalogueStatistics = null;
+  updateStatistics();
   visible = [];
   element("grid").replaceChildren();
   element("grid").style.height = "0px";
@@ -355,6 +389,7 @@ async function scan(force) {
   try {
     const index = await invoke("scan", { force });
     entries = index.entries;
+    catalogueStatistics = index.statistics;
     element("cache-path").value = index.cachePath;
     const previous = element("group").value;
     element("group").replaceChildren();
@@ -381,6 +416,7 @@ async function scan(force) {
     element("status").textContent = "Done";
   } finally {
     scanBusy = false;
+    updateStatistics();
     element("rescan").disabled = false;
     element("clear-cache").disabled = false;
     pumpThumbnails();
@@ -420,6 +456,7 @@ element("bone-names").addEventListener("change", () => {
 element("mesh-outline").addEventListener("change", () => {
   viewer.showMeshOutline(element("mesh-outline").checked);
 });
+element("statistics").addEventListener("change", updateStatistics);
 element("copy-name").addEventListener("click", async () => {
   if (!selected) {
     return;

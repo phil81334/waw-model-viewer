@@ -16,7 +16,9 @@ Search or choose a name group, then click a thumbnail. Drag to rotate, wheel to 
 
 **Inspect model** offers LODs, bones with hover names, a checkbox for all bone names, and a mesh outline. Simple lighting is off by default.
 
-This is a basic colour-textured viewer. No advanced game materials, animation or exporting. Models with missing files or unusable previews are hidden. Game files are never changed.
+**Statistics** shows the models found, available and left out, with reasons. The test installation has **6,109 models: 5,979 available, 130 left out**. Your counts come from your files. Available means the primary mesh and colour inputs passed basic checks; previews are then checked as you browse.
+
+Each material's colour image and stored vertex colour are shown. Normal/specular maps, game lighting, glow and other shader effects are not recreated, so `_on` variants may look alike. No animation or exporting. Missing inputs, empty geometry and failed previews are hidden. Game files are never changed.
 
 Thumbnails load as you browse and are cached in AppData. **Cache…** shows the folder and lets you clear it. **Rescan** refreshes the catalogue and retries hidden previews.
 
