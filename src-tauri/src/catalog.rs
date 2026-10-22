@@ -1,5 +1,6 @@
 //! A read-only model catalogue and disposable preview cache.
 use crate::{
+    animation_catalog::{AnimationCatalog, Playback, Selection, Statistics as AnimationStatistics},
     material::{self, Material},
     model::{self, Bone, Surface},
     textures::{digest, Textures},
@@ -7,9 +8,10 @@ use crate::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
     time::UNIX_EPOCH,
 };
 
@@ -78,6 +80,13 @@ pub struct Index {
     pub statistics: Statistics,
 }
 
+#[derive(Clone, Serialize)]
+pub struct ScanProgress {
+    pub phase: &'static str,
+    pub completed: usize,
+    pub total: usize,
+}
+
 #[derive(Serialize)]
 pub struct ModelSurface {
     #[serde(flatten)]
@@ -95,11 +104,26 @@ pub struct Model {
     pub warnings: Vec<String>,
 }
 
+#[derive(Serialize)]
+pub struct AnimationIndex {
+    pub statistics: AnimationStatistics,
+    pub models: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct Thumbnail {
+    pub id: String,
+    pub png: Option<String>,
+    pub error: Option<String>,
+}
+
 pub struct Catalog {
     pub root: PathBuf,
     pub cache: PathBuf,
     pub index: Index,
     textures: Option<Textures>,
+    animations: Option<AnimationCatalog>,
+    animation_scan: Arc<()>,
 }
 
 fn group(name: &str) -> &str {
@@ -112,7 +136,7 @@ fn group(name: &str) -> &str {
     } else if name.starts_with("vehicle_") {
         "Vehicles"
     } else if name.starts_with("anim_") {
-        "Animated props"
+        "Props (anim_)"
     } else if name.starts_with("dest_") {
         "Destructibles"
     } else {
@@ -122,6 +146,10 @@ fn group(name: &str) -> &str {
 
 fn stamp(path: &Path, output: &mut String) -> Result<(), String> {
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    stamp_metadata(path, &metadata, output)
+}
+
+fn stamp_metadata(path: &Path, metadata: &fs::Metadata, output: &mut String) -> Result<(), String> {
     let time = metadata
         .modified()
         .map_err(|error| error.to_string())?
@@ -139,10 +167,22 @@ impl Catalog {
             cache,
             index: Index::default(),
             textures: None,
+            animations: None,
+            animation_scan: Arc::new(()),
         }
     }
 
     pub fn scan(&mut self, force: bool) -> Result<Index, String> {
+        self.scan_with_progress(force, |_| {})
+    }
+
+    pub fn scan_with_progress(
+        &mut self,
+        force: bool,
+        mut progress: impl FnMut(ScanProgress),
+    ) -> Result<Index, String> {
+        // An older background scan must not replace this scan's catalogue.
+        self.animation_scan = Arc::new(());
         if !self.root.join("raw/xmodel").is_dir() {
             return Err("Install the WaW Modtools first. The raw/xmodel folder is missing. Then click Rescan.".into());
         }
@@ -150,30 +190,52 @@ impl Catalog {
             self.clear_cache()?;
         }
         fs::create_dir_all(self.cache.join("thumbnails")).map_err(|error| error.to_string())?;
+        progress(ScanProgress {
+            phase: "images",
+            completed: 0,
+            total: 0,
+        });
         self.textures = Some(Textures::scan(&self.root, self.cache.join("textures"))?);
         // Changing eligibility also invalidates older blank thumbnail images.
         let mut fingerprint = format!("models-v3-unlit-thumbnails|{}", self.root.display());
         let mut paths = Vec::new();
+        progress(ScanProgress {
+            phase: "files",
+            completed: 0,
+            total: 0,
+        });
         for folder in ["xmodel", "xmodelsurfs", "xmodelparts", "materials"] {
             let directory = self.root.join("raw").join(folder);
             if !directory.is_dir() {
                 continue;
             }
             for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
-                let path = entry.map_err(|error| error.to_string())?.path();
-                if path.is_file() {
-                    paths.push(path);
+                let entry = entry.map_err(|error| error.to_string())?;
+                if entry
+                    .file_type()
+                    .map_err(|error| error.to_string())?
+                    .is_file()
+                {
+                    // Windows already supplied size and write time while listing
+                    // the directory. Do not reopen every asset just to stat it.
+                    let metadata = entry.metadata().map_err(|error| error.to_string())?;
+                    paths.push((entry.path(), metadata));
                 }
             }
         }
-        paths.sort();
-        for path in &paths {
-            stamp(path, &mut fingerprint)?;
+        paths.sort_by(|a, b| a.0.cmp(&b.0));
+        for (path, metadata) in &paths {
+            stamp_metadata(path, metadata, &mut fingerprint)?;
         }
         for name in &self.textures.as_ref().unwrap().archives {
             stamp(&self.root.join("main").join(name), &mut fingerprint)?;
         }
         let key = digest(fingerprint.as_bytes());
+        progress(ScanProgress {
+            phase: "cache",
+            completed: 0,
+            total: 0,
+        });
         let index_path = self.cache.join("index.json");
         if !force {
             if let Ok(bytes) = fs::read(&index_path) {
@@ -181,6 +243,11 @@ impl Catalog {
                     serde_json::from_slice::<(String, Index)>(&bytes)
                 {
                     if cached_key == key {
+                        // Labels describe filename prefixes, not capabilities.
+                        // Refresh them without discarding valid thumbnail IDs.
+                        for entry in &mut index.entries {
+                            entry.group = group(&entry.name.to_lowercase()).into();
+                        }
                         index.cache_path = self.cache.display().to_string();
                         self.remove_hidden(&mut index);
                         self.index = index;
@@ -195,10 +262,18 @@ impl Catalog {
         };
         let mut material_cache: HashMap<String, Result<Material, Exclusion>> = HashMap::new();
         let mut mesh_cache: HashMap<String, Result<(usize, bool), Exclusion>> = HashMap::new();
-        for path in paths
+        let model_folder = self.root.join("raw/xmodel");
+        let models: Vec<_> = paths
             .iter()
-            .filter(|path| path.parent() == Some(self.root.join("raw/xmodel").as_path()))
-        {
+            .filter(|(path, _)| path.parent() == Some(model_folder.as_path()))
+            .collect();
+        let total = models.len();
+        progress(ScanProgress {
+            phase: "models",
+            completed: 0,
+            total,
+        });
+        for (position, (path, _)) in models.into_iter().enumerate() {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             index.statistics.total += 1;
             let result = (|| {
@@ -240,6 +315,13 @@ impl Catalog {
                     index.warnings.push(format!("{name}: {}", error.message()));
                 }
             }
+            if (position + 1) % 32 == 0 || position + 1 == total {
+                progress(ScanProgress {
+                    phase: "models",
+                    completed: position + 1,
+                    total,
+                });
+            }
         }
         self.remove_hidden(&mut index);
         index.entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -253,12 +335,17 @@ impl Catalog {
     }
 
     fn remove_hidden(&self, index: &mut Index) {
+        // Read the small exclusion directory once rather than checking a
+        // nonexistent marker separately for every model in the catalogue.
+        let hidden: HashSet<_> = fs::read_dir(self.cache.join("unavailable"))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .map(|entry| entry.file_name())
+            .collect();
         index.entries.retain(|entry| {
-            !self
-                .cache
-                .join("unavailable")
-                .join(format!("{}.txt", entry.id))
-                .is_file()
+            !hidden.contains(&std::ffi::OsString::from(format!("{}.txt", entry.id)))
         });
         index.statistics.failed_previews = index
             .statistics
@@ -266,7 +353,7 @@ impl Catalog {
             .saturating_sub(index.entries.len());
     }
 
-    pub fn hide(&mut self, id: &str) -> Result<(), String> {
+    pub fn hide(&mut self, id: &str) -> Result<Option<AnimationStatistics>, String> {
         self.entry(id)?;
         let folder = self.cache.join("unavailable");
         fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
@@ -276,12 +363,16 @@ impl Catalog {
         )
         .map_err(|error| error.to_string())?;
         self.index.entries.retain(|entry| entry.id != id);
+        let statistics = self
+            .animations
+            .as_mut()
+            .map(|animations| animations.retain_visible(&self.index.entries));
         self.index.statistics.failed_previews = self
             .index
             .statistics
             .eligible()
             .saturating_sub(self.index.entries.len());
-        Ok(())
+        Ok(statistics)
     }
 
     fn entry(&self, id: &str) -> Result<&Entry, String> {
@@ -396,12 +487,92 @@ impl Catalog {
         .map_err(|error| error.to_string())
     }
 
+    pub fn thumbnails(&self, ids: &[String]) -> Result<Vec<Thumbnail>, String> {
+        if ids.len() > 32 {
+            return Err("Request at most 32 thumbnails at a time.".into());
+        }
+        Ok(ids
+            .iter()
+            .map(|id| match self.thumbnail(id) {
+                Ok(png) => Thumbnail {
+                    id: id.clone(),
+                    png,
+                    error: None,
+                },
+                Err(error) => Thumbnail {
+                    id: id.clone(),
+                    png: None,
+                    error: Some(error),
+                },
+            })
+            .collect())
+    }
+
+    pub fn prepare_animation_scan(&mut self) -> (Arc<()>, AnimationCatalog, Vec<Entry>) {
+        let token = Arc::new(());
+        self.animation_scan = token.clone();
+        let animations = AnimationCatalog::new(self.root.clone(), self.cache.join("animations"));
+        (token, animations, self.index.entries.clone())
+    }
+
+    pub fn finish_animation_scan(
+        &mut self,
+        token: Arc<()>,
+        mut animations: AnimationCatalog,
+    ) -> Result<AnimationIndex, String> {
+        if !Arc::ptr_eq(&token, &self.animation_scan) {
+            return Err("A newer catalogue scan replaced this animation scan.".into());
+        }
+        let statistics = animations.retain_visible(&self.index.entries);
+        let models = animations.playable_models();
+        // Publish only after the token is accepted. Superseded background work
+        // must not restore an old cache after Clear cache or Rescan.
+        animations.save_cache();
+        self.animations = Some(animations);
+        Ok(AnimationIndex { statistics, models })
+    }
+
+    pub fn scan_animations(&mut self, force: bool) -> Result<AnimationStatistics, String> {
+        if self.animations.is_none() {
+            self.animations = Some(AnimationCatalog::new(
+                self.root.clone(),
+                self.cache.join("animations"),
+            ));
+        }
+        self.animations
+            .as_mut()
+            .unwrap()
+            .scan(&self.index.entries, force)
+    }
+
+    pub fn animation_options(&self, model: &str) -> Result<Selection, String> {
+        if !self.index.entries.iter().any(|entry| entry.name == model) {
+            return Err("Select an available model first.".into());
+        }
+        self.animations
+            .as_ref()
+            .map(|animations| animations.options(model))
+            .ok_or_else(|| "Animation catalogue is still loading.".into())
+    }
+
+    pub fn load_animation(&mut self, model: &str, clip: &str) -> Result<Playback, String> {
+        if !self.index.entries.iter().any(|entry| entry.name == model) {
+            return Err("Select an available model first.".into());
+        }
+        self.animations
+            .as_mut()
+            .ok_or("Animation catalogue is still loading.")?
+            .load(model, clip)
+    }
+
     pub fn clear_cache(&mut self) -> Result<(), String> {
         if self.cache.is_dir() {
             fs::remove_dir_all(&self.cache).map_err(|error| error.to_string())?;
         }
         fs::create_dir_all(&self.cache).map_err(|error| error.to_string())?;
         self.textures = None;
+        self.animations = None;
+        self.animation_scan = Arc::new(());
         self.index = Index::default();
         Ok(())
     }

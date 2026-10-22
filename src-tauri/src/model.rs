@@ -28,6 +28,10 @@ pub struct Surface {
     pub colours: Vec<u8>,
     pub indices: Vec<u16>,
     pub max_bone: u16,
+    #[serde(rename = "skinIndices")]
+    pub skin_indices: Vec<u16>,
+    #[serde(rename = "skinWeights")]
+    pub skin_weights: Vec<f32>,
 }
 
 impl Surface {
@@ -63,11 +67,14 @@ impl Surface {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Bone {
     pub name: String,
     pub parent: Option<usize>,
     pub position: [f64; 3],
+    pub local_position: [f64; 3],
+    pub local_rotation: [f64; 4],
 }
 
 pub fn asset_path(root: &Path, folder: &str, name: &str) -> Result<PathBuf, String> {
@@ -179,6 +186,8 @@ pub fn surfaces(path: &Path) -> Result<Vec<Surface>, String> {
             colours: Vec::with_capacity(vertices * 4),
             indices: Vec::with_capacity(triangles * 3),
             max_bone: 0,
+            skin_indices: Vec::with_capacity(vertices * 4),
+            skin_weights: Vec::with_capacity(vertices * 4),
         };
         for _ in 0..vertices {
             surface.normals.extend(reader.vector()?);
@@ -199,13 +208,21 @@ pub fn surfaces(path: &Path) -> Result<Vec<Surface>, String> {
             surface.max_bone = surface.max_bone.max(primary);
             surface.positions.extend(reader.vector()?);
             let mut weight_sum = 0_u32;
-            for _ in 0..extra {
-                surface.max_bone = surface.max_bone.max(reader.u16()?);
-                weight_sum += u32::from(reader.u16()?);
+            let mut indices = [primary, 0, 0, 0];
+            let mut weights = [0.0_f32; 4];
+            for slot in 1..=usize::from(extra) {
+                indices[slot] = reader.u16()?;
+                surface.max_bone = surface.max_bone.max(indices[slot]);
+                let weight = reader.u16()?;
+                weight_sum += u32::from(weight);
+                weights[slot] = f32::from(weight) / 65535.0;
             }
             if weight_sum > 65535 {
                 return Err("Invalid vertex weights.".into());
             }
+            weights[0] = 1.0 - weight_sum as f32 / 65535.0;
+            surface.skin_indices.extend(indices);
+            surface.skin_weights.extend(weights);
         }
         for _ in 0..triangles {
             let a = reader.u16()?;
@@ -277,6 +294,8 @@ pub fn bones(path: &Path) -> Result<Vec<Bone>, String> {
     let mut parents = vec![None; roots];
     let mut positions = vec![[0.0; 3]; roots];
     let mut rotations = vec![[0.0, 0.0, 0.0, 1.0]; roots];
+    let mut local_positions = positions.clone();
+    let mut local_rotations = rotations.clone();
     for _ in 0..children {
         let parent = usize::from(reader.u8()?);
         if parent >= parents.len() {
@@ -292,6 +311,8 @@ pub fn bones(path: &Path) -> Result<Vec<Bone>, String> {
             0.0
         };
         let local = normalise([xyz[0] as f64, xyz[1] as f64, xyz[2] as f64, w]);
+        local_positions.push(position);
+        local_rotations.push(local);
         let offset = rotate(rotations[parent], position);
         positions.push(std::array::from_fn(|axis| {
             positions[parent][axis] + offset[axis]
@@ -305,6 +326,8 @@ pub fn bones(path: &Path) -> Result<Vec<Bone>, String> {
             name: reader.string()?,
             parent: parents[index],
             position: positions[index],
+            local_position: local_positions[index],
+            local_rotation: local_rotations[index],
         });
     }
     // Stock parts have additional metadata after their bone names. Bind-pose

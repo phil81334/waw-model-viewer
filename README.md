@@ -16,15 +16,23 @@ You do not need Node.js, Rust or VS Code to use the EXE. Windows needs [WebView2
 
 ## Browse models
 
-Search or choose a name group, then click a thumbnail. Drag to rotate, wheel to zoom, or right-drag to pan. **Copy name** copies the filename. Groups use filename prefixes.
+Search or choose a name group, then click a thumbnail. **With playable animations** shows only models with verified animation choices and works alongside both filters. Name groups use filename prefixes: **Props (anim_)** is a naming group, not a promise of animations. Drag to rotate, wheel to zoom, or right-drag to pan. **Copy name** copies the filename.
 
 **Inspect model** offers LODs, bones with hover names, a checkbox for all bone names, and a mesh outline. Simple lighting is off by default.
 
+**Animation** lists verified choices for the selected model. Search by filename, choose a clip, then **Play** or **Pause**. Drag the timeline to seek. **Loop** repeats the clip; **Root motion** adds its stored movement and starts from the model's origin. Loops return to the start. LOD changes keep the current playback position.
+
+Choosing a clip centres its first pose. **Reset view** frames the current pose without restarting playback. Movement can still take a model out of view; some weapon clips only move hands or attachments that this preview does not show.
+
+Choices use the installed weapon definitions, scripts and compatible character rigs. Unsupported types, incomplete rigs and unverified pairings are left out. This previews one clip at a time; it does not recreate gameplay, blending, animation events or procedural effects. Models without supported animations can still be browsed.
+
 **Statistics** shows the models found, available and left out, with reasons. The test installation has **6,109 models: 5,979 available, 130 left out**. Your counts come from your files. Available means the primary mesh and colour inputs passed basic checks; previews are then checked as you browse.
 
-Each material's colour image and stored vertex colour are shown. Normal/specular maps, game lighting, glow and other shader effects are not recreated, so `_on` variants may look alike. No animation or exporting. Missing inputs, empty geometry and failed previews are hidden. Game files are never changed.
+Animation statistics show files found, unreadable or unverified files, models with playback and choices for the selected model. A clip not offered for a model is not necessarily broken. Counts come from your installed files.
 
-Thumbnails load as you browse and are cached in AppData. **Cache…** shows the folder and lets you clear it. **Rescan** refreshes the catalogue and retries hidden previews.
+Each material's colour image and stored vertex colour are shown. Normal/specular maps, game lighting, glow and other shader effects are not recreated, so `_on` variants may look alike. No exporting. Missing inputs, empty geometry and failed previews are hidden. Game files are never changed.
+
+The model list, thumbnails and animation index are cached in AppData automatically. Startup shows its scan stage and a model counter when rebuilding the list. Thumbnails load as you browse; animation indexing runs separately, and the playback filter becomes available once checked. **Cache…** shows the folder and lets you clear it. **Rescan** rebuilds the catalogue, clears cached previews and retries hidden models.
 
 ## Run from source
 

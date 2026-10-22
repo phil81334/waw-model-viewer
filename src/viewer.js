@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { PlaybackRig } from "./animation.js";
 
 const side = {
   Back: THREE.FrontSide,
@@ -212,17 +213,38 @@ function hasVisiblePixels(renderer) {
   return false;
 }
 
+function modelBounds(group) {
+  group.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  const surface = new THREE.Box3();
+  group.traverseVisible((object) => {
+    if (!object.isMesh) {
+      return;
+    }
+    // Fit the actual posed surfaces. Weapon previews also contain an invisible
+    // hands rig; its bones must not enlarge the bounds or offset the centre.
+    if (object.isSkinnedMesh) {
+      object.computeBoundingBox();
+      surface.copy(object.boundingBox);
+    } else {
+      if (!object.geometry.boundingBox) {
+        object.geometry.computeBoundingBox();
+      }
+      surface.copy(object.geometry.boundingBox);
+    }
+    box.union(surface.applyMatrix4(object.matrixWorld));
+  });
+  return box;
+}
+
 function oppositeView(camera, group) {
-  const centre = new THREE.Box3()
-    .setFromObject(group)
-    .getCenter(new THREE.Vector3());
+  const centre = modelBounds(group).getCenter(new THREE.Vector3());
   camera.position.sub(centre).negate().add(centre);
   camera.lookAt(centre);
 }
 
 function fit(camera, object, controls = null) {
-  object.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(object);
+  const box = modelBounds(object);
   if (box.isEmpty()) {
     throw new Error("This mesh contains no visible geometry.");
   }
@@ -316,6 +338,7 @@ export class ModelViewer {
     this.overlay = null;
     this.selectedBone = null;
     this.meshOutline = null;
+    this.animation = null;
     this.data = null;
     this.lighting = false;
     this.namesVisible = false;
@@ -363,11 +386,29 @@ export class ModelViewer {
   }
 
   render() {
+    if (this.animation) {
+      const skeleton = this.animation.skeleton;
+      if (!skeleton.boneTexture) {
+        skeleton.computeBoneTexture();
+      }
+      // Upload the current palette before drawing any textured surfaces.
+      // Leaving this to the first surface can use stale texture bindings on
+      // the first draw after a seek, even though the CPU pose is correct.
+      this.renderer.initTexture(skeleton.boneTexture);
+    }
+    this.updateBoneGeometry();
     this.renderer.render(this.scene, this.camera);
     this.updateBoneLabels();
+    if (this.animation && this.pointer && !this.interacting) {
+      // Animation moves joints even when the mouse stands still. Refresh the
+      // hit test so a tooltip cannot follow a bone away from the pointer.
+      this.pickBone();
+    }
   }
 
   clear() {
+    this.animation?.dispose();
+    this.animation = null;
     for (const object of [
       this.model,
       this.overlay,
@@ -414,6 +455,74 @@ export class ModelViewer {
     this.reset();
   }
 
+  setAnimation(playback) {
+    if (!this.model || !this.data) {
+      return;
+    }
+    if (!this.animation) {
+      this.animation = new PlaybackRig(this.model, this.data, (state) => {
+        this.render();
+        this.onPlaybackChange?.(state);
+      });
+      this.animation.onError = (error) => {
+        this.clearAnimation();
+        window.dispatchEvent(
+          new CustomEvent("animation-error", { detail: String(error) }),
+        );
+      };
+      // The old outline used static line vertices. Rebuild it as an indexed
+      // skinned wireframe so the original triangle edges follow the same pose.
+      const visible = this.meshOutline?.visible || false;
+      if (this.meshOutline) {
+        this.scene.remove(this.meshOutline);
+        disposeObject(this.meshOutline);
+        this.meshOutline = null;
+      }
+      this.showMeshOutline(visible);
+    }
+    this.animation.setClip(playback);
+    this.render();
+  }
+
+  clearAnimation() {
+    this.animation?.clearClip();
+    this.render();
+  }
+
+  bonePosition(index) {
+    if (this.animation) {
+      return this.animation.bones[index]
+        .matrixWorld.elements.slice(12, 15);
+    }
+    return this.data.bones[index].position;
+  }
+
+  updateBoneGeometry() {
+    if (!this.animation || !this.data) {
+      return;
+    }
+    if (this.overlay) {
+      const lines = this.overlay.children[0].geometry.attributes.position;
+      const points = this.overlay.children[1].geometry.attributes.position;
+      let line = 0;
+      this.data.bones.forEach((bone, index) => {
+        const position = this.bonePosition(index);
+        points.setXYZ(index, ...position);
+        if (bone.parent !== null) {
+          lines.setXYZ(line++, ...position);
+          lines.setXYZ(line++, ...this.bonePosition(bone.parent));
+        }
+      });
+      lines.needsUpdate = true;
+      points.needsUpdate = true;
+    }
+    if (this.selectedBone && this.hoveredBone !== null) {
+      const attribute = this.selectedBone.geometry.attributes.position;
+      attribute.setXYZ(0, ...this.bonePosition(this.hoveredBone));
+      attribute.needsUpdate = true;
+    }
+  }
+
   reset() {
     if (this.model) {
       fit(this.camera, this.model, this.controls);
@@ -458,12 +567,12 @@ export class ModelViewer {
     if (enabled && this.data?.bones.length) {
       const lines = [];
       const points = [];
-      for (const bone of this.data.bones) {
-        points.push(...bone.position);
+      for (const [index, bone] of this.data.bones.entries()) {
+        points.push(...this.bonePosition(index));
         if (bone.parent !== null) {
           lines.push(
-            ...bone.position,
-            ...this.data.bones[bone.parent].position,
+            ...this.bonePosition(index),
+            ...this.bonePosition(bone.parent),
           );
         }
       }
@@ -478,6 +587,7 @@ export class ModelViewer {
         new THREE.LineBasicMaterial({ color: 0x6dd4ed, depthTest: false }),
       );
       line.renderOrder = 1000;
+      line.frustumCulled = false;
       const pointGeometry = new THREE.BufferGeometry();
       pointGeometry.setAttribute(
         "position",
@@ -493,6 +603,7 @@ export class ModelViewer {
         }),
       );
       point.renderOrder = 1001;
+      point.frustumCulled = false;
       this.overlay.add(line, point);
       this.scene.add(this.overlay);
     }
@@ -508,10 +619,22 @@ export class ModelViewer {
   }
 
   updateBoneLabels() {
+    if (!this.overlay) {
+      // Most browsing does not display bones. Skip projecting the entire rig
+      // on every animation frame when there are no labels or hover targets.
+      this.projectedBones = [];
+      this.tooltip.hidden = true;
+      for (const label of this.boneLabels) {
+        label.hidden = true;
+      }
+      return;
+    }
     const width = this.renderer.domElement.clientWidth;
     const height = this.renderer.domElement.clientHeight;
-    this.projectedBones = (this.data?.bones || []).map((bone) => {
-      const point = new THREE.Vector3(...bone.position).project(this.camera);
+    this.projectedBones = (this.data?.bones || []).map((bone, index) => {
+      const point = new THREE.Vector3(...this.bonePosition(index)).project(
+        this.camera,
+      );
       if (
         ![point.x, point.y, point.z].every(Number.isFinite) ||
         point.z < -1 ||
@@ -627,7 +750,7 @@ export class ModelViewer {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute(
         "position",
-        new THREE.Float32BufferAttribute(bone.position, 3),
+        new THREE.Float32BufferAttribute(this.bonePosition(index), 3),
       );
       this.selectedBone = new THREE.Points(
         geometry,
@@ -639,6 +762,7 @@ export class ModelViewer {
         }),
       );
       this.selectedBone.renderOrder = 1002;
+      this.selectedBone.frustumCulled = false;
       this.scene.add(this.selectedBone);
     }
     this.render();
@@ -657,6 +781,26 @@ export class ModelViewer {
     if (enabled && !this.meshOutline) {
       this.meshOutline = new THREE.Group();
       for (const mesh of this.model.children) {
+        if (!mesh.isMesh) {
+          continue;
+        }
+        if (mesh.isSkinnedMesh) {
+          const geometry = mesh.geometry.clone();
+          const material = new THREE.MeshBasicMaterial({
+            color: 0x80b7dc,
+            wireframe: true,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            transparent: true,
+            opacity: 0.8,
+          });
+          const outline = new THREE.SkinnedMesh(geometry, material);
+          outline.bind(mesh.skeleton, new THREE.Matrix4());
+          outline.frustumCulled = false;
+          outline.renderOrder = 10;
+          this.meshOutline.add(outline);
+          continue;
+        }
         // WireframeGeometry reads the existing indexed triangles. It adds no
         // approximated edges and owns separate buffers, safe to dispose on clear.
         const geometry = new THREE.WireframeGeometry(mesh.geometry);
@@ -677,7 +821,9 @@ export class ModelViewer {
       this.meshOutline.visible = enabled;
     }
     for (const mesh of this.model.children) {
-      this.offsetSurface(mesh.material);
+      if (mesh.isMesh) {
+        this.offsetSurface(mesh.material);
+      }
     }
     this.render();
   }

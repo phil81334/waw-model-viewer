@@ -6,7 +6,8 @@ use std::{
 };
 use tauri::Manager;
 use waw_model_viewer::{
-    catalog::{Catalog, Index, Model},
+    animation_catalog::{Playback, Selection, Statistics as AnimationStatistics},
+    catalog::{AnimationIndex, Catalog, Index, Model, ScanProgress, Thumbnail},
     textures::digest,
 };
 
@@ -65,8 +66,18 @@ async fn with_catalog<T: Send + 'static>(
 }
 
 #[tauri::command]
-async fn scan(force: bool, state: tauri::State<'_, SharedCatalog>) -> Result<Index, String> {
-    with_catalog(state.inner().clone(), move |catalog| catalog.scan(force)).await
+async fn scan(
+    force: bool,
+    progress: tauri::ipc::Channel<ScanProgress>,
+    state: tauri::State<'_, SharedCatalog>,
+) -> Result<Index, String> {
+    with_catalog(state.inner().clone(), move |catalog| {
+        catalog.scan_with_progress(force, |update| {
+            // A closed window must not turn a successful scan into an error.
+            let _ = progress.send(update);
+        })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -76,6 +87,53 @@ async fn load_model(
     state: tauri::State<'_, SharedCatalog>,
 ) -> Result<Model, String> {
     with_catalog(state.inner().clone(), move |catalog| catalog.load(&id, lod)).await
+}
+
+#[tauri::command]
+async fn scan_animations(
+    force: bool,
+    state: tauri::State<'_, SharedCatalog>,
+) -> Result<AnimationIndex, String> {
+    let shared = state.inner().clone();
+    let (token, mut animations, entries) = with_catalog(shared.clone(), |catalog| {
+        Ok(catalog.prepare_animation_scan())
+    })
+    .await?;
+    // Indexing can take seconds. Give thumbnails, textures and model requests
+    // access to the live catalogue while this independent snapshot is checked.
+    let animations = tauri::async_runtime::spawn_blocking(move || {
+        animations.scan_detached(&entries, force)?;
+        Ok::<_, String>(animations)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    with_catalog(shared, move |catalog| {
+        catalog.finish_animation_scan(token, animations)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn animation_options(
+    model: String,
+    state: tauri::State<'_, SharedCatalog>,
+) -> Result<Selection, String> {
+    with_catalog(state.inner().clone(), move |catalog| {
+        catalog.animation_options(&model)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn load_animation(
+    model: String,
+    clip: String,
+    state: tauri::State<'_, SharedCatalog>,
+) -> Result<Playback, String> {
+    with_catalog(state.inner().clone(), move |catalog| {
+        catalog.load_animation(&model, &clip)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -100,6 +158,17 @@ async fn thumbnail(
 }
 
 #[tauri::command]
+async fn thumbnails(
+    ids: Vec<String>,
+    state: tauri::State<'_, SharedCatalog>,
+) -> Result<Vec<Thumbnail>, String> {
+    with_catalog(state.inner().clone(), move |catalog| {
+        catalog.thumbnails(&ids)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn save_thumbnail(
     id: String,
     png: String,
@@ -112,7 +181,10 @@ async fn save_thumbnail(
 }
 
 #[tauri::command]
-async fn hide_model(id: String, state: tauri::State<'_, SharedCatalog>) -> Result<(), String> {
+async fn hide_model(
+    id: String,
+    state: tauri::State<'_, SharedCatalog>,
+) -> Result<Option<AnimationStatistics>, String> {
     with_catalog(state.inner().clone(), move |catalog| catalog.hide(&id)).await
 }
 
@@ -157,8 +229,12 @@ fn main() {
             startup,
             scan,
             load_model,
+            scan_animations,
+            animation_options,
+            load_animation,
             texture_pixels,
             thumbnail,
+            thumbnails,
             save_thumbnail,
             hide_model,
             clear_cache,

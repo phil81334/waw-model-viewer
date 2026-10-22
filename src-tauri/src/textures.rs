@@ -1,13 +1,17 @@
 //! Read main IWDs in the verified native priority. Never use raw/images.
 use crate::iwi;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
+    sync::Mutex,
+    time::UNIX_EPOCH,
 };
 
+#[derive(Serialize, Deserialize)]
 struct Source {
     archive: PathBuf,
     entry: String,
@@ -15,10 +19,23 @@ struct Source {
     size: u64,
 }
 
+#[derive(Serialize, Deserialize)]
+struct SavedSources {
+    fingerprint: String,
+    sources: HashMap<String, Source>,
+}
+
+struct OpenArchive {
+    length: u64,
+    modified: std::time::SystemTime,
+    archive: zip::ZipArchive<File>,
+}
+
 pub struct Textures {
     sources: HashMap<String, Source>,
     cache: PathBuf,
     pub archives: Vec<String>,
+    open_archives: Mutex<HashMap<PathBuf, OpenArchive>>,
 }
 
 pub fn digest(bytes: &[u8]) -> String {
@@ -57,6 +74,34 @@ impl Textures {
         if archives.is_empty() {
             return Err("No IWD archives found in the game's main folder.".into());
         }
+        // Validate every archive's metadata before trusting the saved lookup.
+        // The priority order and winner selection below remain unchanged.
+        let mut fingerprint = format!("iwd-image-sources-1|{}", root.display());
+        for name in &archives {
+            let metadata =
+                fs::metadata(root.join("main").join(name)).map_err(|error| error.to_string())?;
+            let modified = metadata
+                .modified()
+                .map_err(|error| error.to_string())?
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| error.to_string())?
+                .as_nanos();
+            fingerprint.push_str(&format!("|{name}:{}:{modified}", metadata.len()));
+        }
+        let fingerprint = digest(fingerprint.as_bytes());
+        let index_path = cache.join("sources.json");
+        if let Ok(bytes) = fs::read(&index_path) {
+            if let Ok(saved) = serde_json::from_slice::<SavedSources>(&bytes) {
+                if saved.fingerprint == fingerprint {
+                    return Ok(Self {
+                        sources: saved.sources,
+                        cache,
+                        archives,
+                        open_archives: Mutex::new(HashMap::new()),
+                    });
+                }
+            }
+        }
         let mut sources = HashMap::new();
         for name in &archives {
             let path = root.join("main").join(name);
@@ -78,10 +123,20 @@ impl Textures {
                 });
             }
         }
-        Ok(Self {
+        let saved = SavedSources {
+            fingerprint,
             sources,
+        };
+        if let Ok(bytes) = serde_json::to_vec(&saved) {
+            if fs::create_dir_all(&cache).is_ok() {
+                let _ = fs::write(index_path, bytes);
+            }
+        }
+        Ok(Self {
+            sources: saved.sources,
             cache,
             archives,
+            open_archives: Mutex::new(HashMap::new()),
         })
     }
 
@@ -136,16 +191,41 @@ impl Textures {
         if source.size > 128 * 1024 * 1024 {
             return Err("Colour image exceeds the supported file size.".into());
         }
-        let file = File::open(&source.archive).map_err(|error| error.to_string())?;
-        let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
-        let member = archive
-            .by_name(&source.entry)
-            .map_err(|error| error.to_string())?;
         let mut input = Vec::new();
-        member
-            .take(128 * 1024 * 1024 + 1)
-            .read_to_end(&mut input)
-            .map_err(|error| error.to_string())?;
+        {
+            // Reuse the parsed central directory, not decoded image buffers.
+            // Reopen a live archive if its metadata changes while browsing.
+            let modified = metadata.modified().map_err(|error| error.to_string())?;
+            let mut opened = self
+                .open_archives
+                .lock()
+                .map_err(|error| error.to_string())?;
+            let unchanged = opened.get(&source.archive).is_some_and(|archive| {
+                archive.length == metadata.len() && archive.modified == modified
+            });
+            if !unchanged {
+                let file = File::open(&source.archive).map_err(|error| error.to_string())?;
+                let archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+                opened.insert(
+                    source.archive.clone(),
+                    OpenArchive {
+                        length: metadata.len(),
+                        modified,
+                        archive,
+                    },
+                );
+            }
+            let member = opened
+                .get_mut(&source.archive)
+                .unwrap()
+                .archive
+                .by_name(&source.entry)
+                .map_err(|error| error.to_string())?;
+            member
+                .take(128 * 1024 * 1024 + 1)
+                .read_to_end(&mut input)
+                .map_err(|error| error.to_string())?;
+        }
         let levels = iwi::decode(&input)?;
         let level = levels
             .iter()

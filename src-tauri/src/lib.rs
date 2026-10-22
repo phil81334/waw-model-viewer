@@ -1,3 +1,5 @@
+pub mod animation;
+pub mod animation_catalog;
 pub mod catalog;
 pub mod iwi;
 pub mod material;
