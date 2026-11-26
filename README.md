@@ -1,8 +1,8 @@
 # WaW Model Viewer
 
-**An unofficial community app. Not affiliated with Treyarch, Activision or UGX.**
-
 Browse World at War's Modtools models and find a filename by eye. Click a thumbnail to rotate a textured preview and copy its name. Made by [phil81334](https://github.com/phil81334). Built with JavaScript, Rust, Vite, Tauri and Three.js.
+
+WaW Model Viewer is not affiliated with Treyarch, Activision or any modding community.
 
 ![WaW Model Viewer](images/waw-model-viewer.png)
 
@@ -68,9 +68,11 @@ Next time, run `npm run dev`, or click the play button beside **dev** in VS Code
 | --- | --- |
 | `npm run dev` | Opens the desktop app for development. |
 | `npm run dev:web` | Shows the UI in a browser. Cannot read game models. |
-| `npm run build` | Creates `release/waw-model-viewer.exe`. |
+| `npm run build` | Creates `release/vX.Y.Z/waw-model-viewer.exe`. |
 | `npm run build:web` | Builds the UI files only. No EXE. |
 
-To make your own EXE, run `npm run build`, then copy `release/waw-model-viewer.exe` beside `CoDWaW.exe`.
+The version folder matches `package.json`. If that version is already archived, the build prints the location of your newly compiled EXE.
+
+To make your own EXE, run `npm run build`, then copy `release/vX.Y.Z/waw-model-viewer.exe` beside `CoDWaW.exe`.
 
 [Credits](ATTRIBUTION.md) · [GPL-3.0 licence](LICENCE)

@@ -43,12 +43,18 @@ try {
     process.exitCode = code ?? 1;
     if (code === 0 && command === "build") {
       try {
-        mkdirSync(resolve(root, "release"), { recursive: true });
-        copyFileSync(
-          resolve(root, "src-tauri/target/release/waw-model-viewer.exe"),
-          resolve(root, "release/waw-model-viewer.exe"),
-        );
-        console.log("Ready: release/waw-model-viewer.exe");
+        const { version } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+        const versionDir = resolve(root, "release", `v${version}`);
+        const executable = resolve(versionDir, "waw-model-viewer.exe");
+        const builtExecutable = resolve(root, "src-tauri/target/release/waw-model-viewer.exe");
+        if (existsSync(resolve(versionDir, "release-info.md")) && existsSync(executable)) {
+          console.log(`Release v${version} is already archived. Your new build is at ${builtExecutable}`);
+          return;
+        }
+
+        mkdirSync(versionDir, { recursive: true });
+        copyFileSync(builtExecutable, executable);
+        console.log(`Ready: ${executable}`);
       } catch (error) {
         console.error(`Could not copy the EXE to release: ${error.message}`);
         process.exitCode = 1;

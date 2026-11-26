@@ -4,3 +4,6 @@
 /src-tauri/target/
 /src-tauri/gen/
 /release/
+/AGENTS.md
+/.agents/
+/.codex/
