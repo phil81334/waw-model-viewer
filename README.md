@@ -71,8 +71,8 @@ Next time, run `npm run dev`, or click the play button beside **dev** in VS Code
 | `npm run build` | Creates `release/vX.Y.Z/waw-model-viewer.exe`. |
 | `npm run build:web` | Builds the UI files only. No EXE. |
 
-The version folder matches `package.json`. If that version is already archived, the build prints the location of your newly compiled EXE.
+The version folder matches `package.json`. Rebuilding an archived version writes the new EXE to `release/vX.Y.Z-rebuild/waw-model-viewer.exe`.
 
-To make your own EXE, run `npm run build`, then copy `release/vX.Y.Z/waw-model-viewer.exe` beside `CoDWaW.exe`.
+To make your own EXE, run `npm run build`, then copy the EXE from the path printed by the build beside `CoDWaW.exe`.
 
 [Credits](ATTRIBUTION.md) · [GPL-3.0 licence](LICENCE)

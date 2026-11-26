@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const [command, ...args] = process.argv.slice(2);
 const env = { ...process.env };
+env.CARGO_TARGET_DIR = resolve(root, env.CARGO_TARGET_DIR || "src-tauri/target");
 const pathKey =
   Object.keys(env).find((key) => key.toLowerCase() === "path") || "PATH";
 
@@ -46,9 +47,13 @@ try {
         const { version } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
         const versionDir = resolve(root, "release", `v${version}`);
         const executable = resolve(versionDir, "waw-model-viewer.exe");
-        const builtExecutable = resolve(root, "src-tauri/target/release/waw-model-viewer.exe");
+        const builtExecutable = resolve(env.CARGO_TARGET_DIR, "release", "waw-model-viewer.exe");
         if (existsSync(resolve(versionDir, "release-info.md")) && existsSync(executable)) {
-          console.log(`Release v${version} is already archived. Your new build is at ${builtExecutable}`);
+          const rebuildDir = versionDir + "-rebuild";
+          const rebuiltExecutable = resolve(rebuildDir, "waw-model-viewer.exe");
+          mkdirSync(rebuildDir, { recursive: true });
+          copyFileSync(builtExecutable, rebuiltExecutable);
+          console.log(`Ready: ${rebuiltExecutable}`);
           return;
         }
 
